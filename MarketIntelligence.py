@@ -83,7 +83,7 @@ with col1:
     if st.button("⬅ Back"):
         if st.session_state.drill_stack:
             st.session_state.drill_stack.pop()
-            st.rerun()  # Updated from experimental_rerun
+            st.rerun()
 with col2:
     st.write("Click a region on the map to drill down. Use Back to go up.")
 
@@ -181,7 +181,7 @@ else:
 st.header(f"Map view: {display_level}")
 
 # -------------------------
-# District choropleth (with native click handling)
+# District choropleth (with native click handling and debug)
 # -------------------------
 if display_level == "District":
     gdf = load_geojson_safe(DISTRICT_GEO)
@@ -193,12 +193,18 @@ if display_level == "District":
         st.stop()
 
     gdf["NAME_2"] = gdf["NAME_2"].astype(str).apply(standardize_name)
+    # Debug: Show unique district names from GeoJSON
+    st.write("GeoJSON District Names (sample):", gdf["NAME_2"].unique()[:5])
 
     agg = filtered.groupby("District")["Transaction Price"].mean().reset_index().rename(columns={"Transaction Price": "Value"})
     agg["District"] = agg["District"].astype(str).apply(standardize_name)
+    # Debug: Show unique district names from data
+    st.write("Data District Names (sample):", agg["District"].unique()[:5])
 
     merged = gdf.merge(agg, left_on="NAME_2", right_on="District", how="left")
     merged["Value"] = merged["Value"].fillna(0)
+    # Debug: Check merge success
+    st.write(f"Merged districts with data: {len(merged[merged['Value'] > 0])}/{len(merged)}")
 
     fig = px.choropleth_mapbox(
         merged,
@@ -216,11 +222,13 @@ if display_level == "District":
     # Native click handling with on_select
     selected_points = st.plotly_chart(fig, key="district_map", on_select="rerun", use_container_width=True)
 
-    # Handle selection (click on region)
+    # Handle selection (click on region) with debug
     if selected_points and 'points' in selected_points:
-        idx = selected_points['points'][0]['pointIndex']  # Get first clicked point
+        idx = selected_points['points'][0].get('pointIndex')
+        st.write(f"Clicked index: {idx}")  # Debug output
         if idx is not None:
             chosen = merged.iloc[idx]["NAME_2"]
+            st.write(f"Selected region: {chosen}")  # Debug output
             st.session_state.drill_stack.append(("District", chosen))
             st.rerun()
 
@@ -271,9 +279,11 @@ elif display_level == "Mukim":
             selected_points = st.plotly_chart(fig, key="mukim_map", on_select="rerun", use_container_width=True)
 
             if selected_points and 'points' in selected_points:
-                idx = selected_points['points'][0]['pointIndex']
+                idx = selected_points['points'][0].get('pointIndex')
+                st.write(f"Clicked Mukim index: {idx}")  # Debug output
                 if idx is not None:
                     chosen_mukim = points.iloc[idx]["Mukim"]
+                    st.write(f"Selected Mukim: {chosen_mukim}")  # Debug output
                     st.session_state.drill_stack.append(("Mukim", chosen_mukim))
                     st.rerun()
 
