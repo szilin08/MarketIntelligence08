@@ -5,6 +5,7 @@ import geopandas as gpd
 import plotly.express as px
 from streamlit_plotly_events import plotly_events
 from geopy.geocoders import Nominatim
+import requests
 import time
 import os
 
@@ -15,11 +16,24 @@ st.set_page_config(layout="wide", page_title="MY Property Market Dashboard")
 # -------------------------
 @st.cache_data
 def load_geojson_safe(path):
-    """Try to load a geojson safely (force GeoJSON driver if needed)."""
+    """Load a geojson from local or URL safely."""
     try:
-        return gpd.read_file(f"GeoJSON:{path}")
+        if path.startswith("http"):
+            return gpd.read_file(path)
+        else:
+            return gpd.read_file(f"GeoJSON:{path}")
     except Exception:
         return gpd.read_file(path, driver="GeoJSON")
+
+def geojson_exists(path):
+    """Check if a geojson file exists (local or URL)."""
+    if path.startswith("http"):
+        try:
+            r = requests.head(path, allow_redirects=True, timeout=10)
+            return r.status_code == 200
+        except Exception:
+            return False
+    return os.path.exists(path)
 
 @st.cache_data
 def geocode_places(place_list):
@@ -46,10 +60,24 @@ def standardize_name(s):
         return s
     return str(s).strip().title()
 
+def deduplicate_columns(columns):
+    """Ensure dataframe columns are unique by appending suffixes."""
+    seen = {}
+    new_cols = []
+    for col in columns:
+        if col not in seen:
+            seen[col] = 0
+            new_cols.append(col)
+        else:
+            seen[col] += 1
+            new_cols.append(f"{col}_{seen[col]}")
+    return new_cols
+
 # -------------------------
-# Config: local files (update paths if different)
+# Config: GeoJSON source
 # -------------------------
 DISTRICT_GEO = "https://raw.githubusercontent.com/szilin08/MarketIntelligence08/main/gadm41_MYS_2.json"
+
 # -------------------------
 # UI & Upload
 # -------------------------
@@ -79,23 +107,8 @@ if uploaded_file is None:
 # -------------------------
 raw = pd.read_excel(uploaded_file, sheet_name="Open Transaction Data")
 
-# ✅ fix duplicate column names
 raw.columns = [c.strip() for c in raw.columns]
-def deduplicate_columns(columns):
-    """Ensure dataframe columns are unique by appending suffixes."""
-    seen = {}
-    new_cols = []
-    for col in columns:
-        if col not in seen:
-            seen[col] = 0
-            new_cols.append(col)
-        else:
-            seen[col] += 1
-            new_cols.append(f"{col}_{seen[col]}")
-    return new_cols
-
 raw.columns = deduplicate_columns(raw.columns)
-
 
 # attempt to map common header variants to expected names
 col_map_guess = {}
@@ -113,7 +126,6 @@ for std, opts in candidates.items():
             col_map_guess[std] = o
             break
 
-# if price not found, pick last numeric column as fallback
 if "Transaction Price" not in col_map_guess:
     numeric_cols = raw.select_dtypes(include="number").columns.tolist()
     if numeric_cols:
@@ -164,7 +176,6 @@ filtered = filtered[(filtered["Transaction Price"] >= price_range[0]) & (filtere
 # -------------------------
 # Determine display level
 # -------------------------
-# Levels: District (choropleth) -> Mukim (bubble fallback) -> Scheme (bubble)
 if not st.session_state.drill_stack:
     display_level = "District"
 else:
@@ -184,13 +195,11 @@ st.header(f"Map view: {display_level}")
 # District choropleth
 # -------------------------
 if display_level == "District":
-    if not os.path.exists(DISTRICT_GEO):
-        st.error(f"District GeoJSON not found at {DISTRICT_GEO}. Please place the file there.")
+    if not geojson_exists(DISTRICT_GEO):
+        st.error(f"District GeoJSON not found at {DISTRICT_GEO}. Please check the link or file path.")
         st.stop()
 
     gdf = load_geojson_safe(DISTRICT_GEO)
-    if "NAME_2" not in gdf.columns:
-        st.warning(f"Expected 'NAME_2' in {DISTRICT_GEO} but found columns: {gdf.columns.tolist()}")
     gdf["NAME_2"] = gdf["NAME_2"].astype(str).apply(standardize_name)
 
     agg = filtered.groupby("District")["Transaction Price"].mean().reset_index().rename(columns={"Transaction Price": "Value"})
@@ -223,7 +232,7 @@ if display_level == "District":
             st.experimental_rerun()
 
 # -------------------------
-# Mukim bubble map (geocode fallback)
+# Mukim bubble map
 # -------------------------
 elif display_level == "Mukim":
     parent = None
@@ -232,7 +241,7 @@ elif display_level == "Mukim":
             parent = area
             break
     if parent is None:
-        st.error("Parent district not found in drill stack. Use Back and click a district first.")
+        st.error("Parent district not found. Use Back and click a district first.")
         st.stop()
 
     st.subheader(f"Mukim-level (bubble map) for: {parent}")
@@ -275,7 +284,7 @@ elif display_level == "Mukim":
                     st.experimental_rerun()
 
 # -------------------------
-# Scheme bubble map & details
+# Scheme bubble map
 # -------------------------
 elif display_level == "Scheme":
     parent_mukim = None
