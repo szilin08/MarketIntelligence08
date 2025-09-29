@@ -9,3 +9,5 @@ rtree
 geopy
 streamlit-plotly-events
 openpyxl
+prophet
+
