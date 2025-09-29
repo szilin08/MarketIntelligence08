@@ -11,3 +11,4 @@ streamlit-plotly-events
 openpyxl
 prophet
 yfinance
+statsmodels
