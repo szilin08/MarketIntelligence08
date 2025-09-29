@@ -148,15 +148,15 @@ if page == "Property Market Dashboard":
 # -------------------------
 # Page 2: Automated Valuation Model
 # -------------------------
-elif page == "Automated Valuation Model":
-    st.title("Automated Valuation Model")
 
-    exec(open("Automated_Valuation_Model.py").read())
+elif page == "Automated Valuation Model":
+    Automated_Valuation_Model.run()
 
 # -------------------------
 # Page 3: Third Page
 # -------------------------
 elif page == "Shares Playground":
     exec(open("Shares_Steff_Playground.py").read())
+
 
 
