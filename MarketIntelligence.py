@@ -23,12 +23,12 @@ def load_geojson_safe(path):
         st.error(f"Error loading GeoJSON from {path}: {e}")
         return None
 
-@st.cache_data
+@st.cache_data(ttl=3600)  # Cache for 1 hour to avoid rate limits
 def geocode_places(place_list):
     """Geocode a list of place names with Nominatim (cached)."""
     geolocator = Nominatim(user_agent="property_map_streamlit")
     results = {}
-    for p in place_list:
+    for p in place_list[:100]:  # Limit to avoid timeouts
         key = str(p).strip()
         if not key or key in results:
             continue
@@ -47,6 +47,19 @@ def standardize_name(s):
     if pd.isna(s):
         return s
     return str(s).strip().title()
+
+def deduplicate_columns(columns):
+    """Ensure dataframe columns are unique by appending suffixes."""
+    seen = {}
+    new_cols = []
+    for col in columns:
+        if col not in seen:
+            seen[col] = 0
+            new_cols.append(col)
+        else:
+            seen[col] += 1
+            new_cols.append(f"{col}_{seen[col]}")
+    return new_cols
 
 # -------------------------
 # Config: Use raw GitHub URL
@@ -85,19 +98,6 @@ raw = pd.read_excel(uploaded_file, sheet_name="Open Transaction Data")
 
 # Fix duplicate column names
 raw.columns = [c.strip() for c in raw.columns]
-def deduplicate_columns(columns):
-    """Ensure dataframe columns are unique by appending suffixes."""
-    seen = {}
-    new_cols = []
-    for col in columns:
-        if col not in seen:
-            seen[col] = 0
-            new_cols.append(col)
-        else:
-            seen[col] += 1
-            new_cols.append(f"{col}_{seen[col]}")
-    return new_cols
-
 raw.columns = deduplicate_columns(raw.columns)
 
 # Attempt to map common header variants to expected names
@@ -275,6 +275,9 @@ elif display_level == "Mukim":
         mukim_year_agg["lon"] = mukim_year_agg["Mukim"].map(lambda x: coords.get(x, (None, None))[1])
         points = mukim_year_agg.dropna(subset=["lat", "lon"])
 
+        # Debug: Show geocoding results
+        st.write("Geocoding results for Mukims:", coords)
+
         if points.empty:
             st.info("No geocoded mukim coordinates found.")
         else:
@@ -337,6 +340,9 @@ elif display_level == "Scheme":
         scheme_agg["lat"] = scheme_agg["Scheme Name/Area"].map(lambda x: coords.get(x, (None, None))[0])
         scheme_agg["lon"] = scheme_agg["Scheme Name/Area"].map(lambda x: coords.get(x, (None, None))[1])
         points = scheme_agg.dropna(subset=["lat", "lon"]).copy()
+
+        # Debug: Show geocoding results
+        st.write("Geocoding results for Schemes:", coords)
 
         if not points.empty:
             fig = px.scatter_mapbox(
