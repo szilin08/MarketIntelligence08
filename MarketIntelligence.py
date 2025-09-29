@@ -151,19 +151,12 @@ if page == "Property Market Dashboard":
 elif page == "Automated Valuation Model":
     st.title("Automated Valuation Model")
 
-    uploaded_file = st.file_uploader("Upload your Open Transaction Data.xlsx for Valuation", type=["xlsx"])
-    if uploaded_file is None:
-        st.info("Please upload the Excel file to start the valuation model.")
-        st.stop()
-
-    # (Your Prophet model + forecasting + valuation input logic goes here)
-    # -------------------------
-    # Again, I would paste your full code here since it’s already working well
-    # -------------------------
+    exec(open("Automated_Valuation_Model.py").read())
 
 # -------------------------
 # Page 3: Third Page
 # -------------------------
 elif page == "Shares Playground":
     exec(open("Shares_Steff_Playground.py").read())
+
 
