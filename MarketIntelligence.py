@@ -9,14 +9,14 @@ import time
 
 st.set_page_config(layout="wide", page_title="MY Property Market Dashboard")
 
-# -------------------------
+# ------------------------
 # Helpers & cached funcs
 # -------------------------
 @st.cache_data
-def load_geojson_safe(path):
+def load_geojson_safe(path: str):
     """Try to load a geojson safely (force GeoJSON driver if needed)."""
     try:
-        return gpd.read_file(path)
+        return gpd.read_file(f"GeoJSON:{path}")
     except Exception:
         return gpd.read_file(path, driver="GeoJSON")
 
@@ -46,7 +46,7 @@ def standardize_name(s):
     return str(s).strip().title()
 
 # -------------------------
-# Config: GitHub-hosted GeoJSON
+# Config: GeoJSON source
 # -------------------------
 DISTRICT_GEO = "https://raw.githubusercontent.com/szilin08/MarketIntelligence08/main/gadm41_MYS_2.json"
 
@@ -138,6 +138,7 @@ df["Property Type"] = df["Property Type"].astype(str).apply(standardize_name)
 
 # sidebar filters
 st.sidebar.header("Filters")
+states_sel = st.sidebar.multiselect("State (if present)", options=sorted(df.get("State", df["District"].unique())), default=[])
 districts_sel = st.sidebar.multiselect("District", options=sorted(df["District"].unique()), default=[])
 mukims_sel = st.sidebar.multiselect("Mukim", options=sorted(df["Mukim"].unique()), default=[])
 ptype_sel = st.sidebar.multiselect("Property Type", options=sorted(df["Property Type"].unique()), default=[])
@@ -230,10 +231,10 @@ elif display_level == "Mukim":
             parent = area
             break
     if parent is None:
-        st.error("Parent district not found. Use Back and click a district first.")
+        st.error("Parent district not found in drill stack. Use Back and click a district first.")
         st.stop()
 
-    st.subheader(f"Mukim-level for: {parent}")
+    st.subheader(f"Mukim-level (bubble map) for: {parent}")
     df_sub = filtered[filtered["District"] == parent].copy()
     if df_sub.empty:
         st.info("No transactions for this district under current filters.")
@@ -273,7 +274,7 @@ elif display_level == "Mukim":
                     st.experimental_rerun()
 
 # -------------------------
-# Scheme bubble map & details
+# Scheme bubble map
 # -------------------------
 elif display_level == "Scheme":
     parent_mukim = None
