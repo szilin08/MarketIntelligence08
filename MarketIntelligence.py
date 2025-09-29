@@ -1,11 +1,8 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
 import plotly.express as px
-from streamlit_plotly_events import plotly_events
 from geopy.geocoders import Nominatim
-import requests
 import time
 import os
 
@@ -16,31 +13,22 @@ st.set_page_config(layout="wide", page_title="MY Property Market Dashboard")
 # -------------------------
 @st.cache_data
 def load_geojson_safe(path):
-    """Load a geojson from local or URL safely."""
+    """Try to load a geojson safely (force GeoJSON driver if needed)."""
     try:
         if path.startswith("http"):
             return gpd.read_file(path)
         else:
-            return gpd.read_file(f"GeoJSON:{path}")
-    except Exception:
-        return gpd.read_file(path, driver="GeoJSON")
+            return gpd.read_file(path, driver="GeoJSON")
+    except Exception as e:
+        st.error(f"Error loading GeoJSON from {path}: {e}")
+        return None
 
-def geojson_exists(path):
-    """Check if a geojson file exists (local or URL)."""
-    if path.startswith("http"):
-        try:
-            r = requests.head(path, allow_redirects=True, timeout=10)
-            return r.status_code == 200
-        except Exception:
-            return False
-    return os.path.exists(path)
-
-@st.cache_data
+@st.cache_data(ttl=3600)  # Cache for 1 hour to avoid rate limits
 def geocode_places(place_list):
     """Geocode a list of place names with Nominatim (cached)."""
     geolocator = Nominatim(user_agent="property_map_streamlit")
     results = {}
-    for p in place_list:
+    for p in place_list[:100]:  # Limit to avoid timeouts
         key = str(p).strip()
         if not key or key in results:
             continue
@@ -52,7 +40,7 @@ def geocode_places(place_list):
                 results[key] = (None, None)
         except Exception:
             results[key] = (None, None)
-        time.sleep(1)  # polite
+        time.sleep(1)  # Polite delay
     return results
 
 def standardize_name(s):
@@ -74,7 +62,7 @@ def deduplicate_columns(columns):
     return new_cols
 
 # -------------------------
-# Config: GeoJSON source
+# Config: Use raw GitHub URL for cloud deployment
 # -------------------------
 DISTRICT_GEO = "https://raw.githubusercontent.com/szilin08/MarketIntelligence08/main/gadm41_MYS_2.json"
 
@@ -85,9 +73,9 @@ st.title("Malaysian Property Market Intelligence Dashboard (Drillable Map)")
 
 uploaded_file = st.file_uploader("Upload your Open Transaction Data.xlsx", type=["xlsx"])
 
-# session state for navigation
+# Session state for navigation
 if "drill_stack" not in st.session_state:
-    st.session_state.drill_stack = []  # list of tuples (level, area_name)
+    st.session_state.drill_stack = []  # List of tuples (level, area_name)
 
 # Back control
 col1, col2 = st.columns([1, 6])
@@ -95,6 +83,7 @@ with col1:
     if st.button("⬅ Back"):
         if st.session_state.drill_stack:
             st.session_state.drill_stack.pop()
+            st.rerun()  # Updated from experimental_rerun
 with col2:
     st.write("Click a region on the map to drill down. Use Back to go up.")
 
@@ -110,7 +99,7 @@ raw = pd.read_excel(uploaded_file, sheet_name="Open Transaction Data")
 raw.columns = [c.strip() for c in raw.columns]
 raw.columns = deduplicate_columns(raw.columns)
 
-# attempt to map common header variants to expected names
+# Attempt to map common header variants to expected names
 col_map_guess = {}
 candidates = {
     "Property Type": ["Property Type", "Property type", "PROPERTY TYPE"],
@@ -138,7 +127,7 @@ if missing:
     st.error(f"Required column(s) missing: {missing}. Detected columns: {raw.columns.tolist()}")
     st.stop()
 
-# clean and derived columns
+# Clean and derived columns
 df["Transaction Date"] = pd.to_datetime(df["Month, Year of Transaction Date"], errors="coerce")
 df["Year"] = df["Transaction Date"].dt.year.fillna(0).astype(int)
 df["Month"] = df["Transaction Date"].dt.month.fillna(0).astype(int)
@@ -149,7 +138,7 @@ df["Mukim"] = df["Mukim"].astype(str).apply(standardize_name)
 df["Scheme Name/Area"] = df["Scheme Name/Area"].astype(str).apply(lambda x: x.strip() if pd.notna(x) else x)
 df["Property Type"] = df["Property Type"].astype(str).apply(standardize_name)
 
-# sidebar filters
+# Sidebar filters
 st.sidebar.header("Filters")
 states_sel = st.sidebar.multiselect("State (if present)", options=sorted(df.get("State", df["District"].unique())), default=[])
 districts_sel = st.sidebar.multiselect("District", options=sorted(df["District"].unique()), default=[])
@@ -162,7 +151,7 @@ min_price = int(df["Transaction Price"].min(skipna=True))
 max_price = int(df["Transaction Price"].max(skipna=True))
 price_range = st.sidebar.slider("Price range", min_price, max_price, (min_price, max_price))
 
-# apply filters
+# Apply filters
 filtered = df.copy()
 if districts_sel:
     filtered = filtered[filtered["District"].isin(districts_sel)]
@@ -192,14 +181,17 @@ else:
 st.header(f"Map view: {display_level}")
 
 # -------------------------
-# District choropleth
+# District choropleth (with native click handling)
 # -------------------------
 if display_level == "District":
-    if not geojson_exists(DISTRICT_GEO):
-        st.error(f"District GeoJSON not found at {DISTRICT_GEO}. Please check the link or file path.")
+    gdf = load_geojson_safe(DISTRICT_GEO)
+    if gdf is None:
         st.stop()
 
-    gdf = load_geojson_safe(DISTRICT_GEO)
+    if "NAME_2" not in gdf.columns:
+        st.warning(f"Expected 'NAME_2' in {DISTRICT_GEO} but found columns: {gdf.columns.tolist()}")
+        st.stop()
+
     gdf["NAME_2"] = gdf["NAME_2"].astype(str).apply(standardize_name)
 
     agg = filtered.groupby("District")["Transaction Price"].mean().reset_index().rename(columns={"Transaction Price": "Value"})
@@ -220,19 +212,20 @@ if display_level == "District":
         hover_data={"NAME_2": True, "Value": True},
         labels={"Value": "Avg Price (RM)"}
     )
-    clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False)
-    st.plotly_chart(fig, use_container_width=True)
 
-    if clicked:
-        pt = clicked[0]
-        idx = pt.get("pointIndex")
+    # Native click handling with on_select
+    selected_points = st.plotly_chart(fig, key="district_map", on_select="rerun", use_container_width=True)
+
+    # Handle selection (click on region)
+    if selected_points and 'points' in selected_points:
+        idx = selected_points['points'][0]['pointIndex']  # Get first clicked point
         if idx is not None:
             chosen = merged.iloc[idx]["NAME_2"]
             st.session_state.drill_stack.append(("District", chosen))
-            st.experimental_rerun()
+            st.rerun()
 
 # -------------------------
-# Mukim bubble map
+# Mukim bubble map (geocode fallback)
 # -------------------------
 elif display_level == "Mukim":
     parent = None
@@ -241,7 +234,7 @@ elif display_level == "Mukim":
             parent = area
             break
     if parent is None:
-        st.error("Parent district not found. Use Back and click a district first.")
+        st.error("Parent district not found in drill stack. Use Back and click a district first.")
         st.stop()
 
     st.subheader(f"Mukim-level (bubble map) for: {parent}")
@@ -273,18 +266,19 @@ elif display_level == "Mukim":
                 zoom=9,
                 title=f"Avg Transaction Price by Mukim in {parent}"
             )
-            clicked = plotly_events(fig, click_event=True, hover_event=False, select_event=False)
-            st.plotly_chart(fig, use_container_width=True)
 
-            if clicked:
-                idx = clicked[0].get("pointIndex")
+            # Native click handling
+            selected_points = st.plotly_chart(fig, key="mukim_map", on_select="rerun", use_container_width=True)
+
+            if selected_points and 'points' in selected_points:
+                idx = selected_points['points'][0]['pointIndex']
                 if idx is not None:
                     chosen_mukim = points.iloc[idx]["Mukim"]
                     st.session_state.drill_stack.append(("Mukim", chosen_mukim))
-                    st.experimental_rerun()
+                    st.rerun()
 
 # -------------------------
-# Scheme bubble map
+# Scheme bubble map & details
 # -------------------------
 elif display_level == "Scheme":
     parent_mukim = None
@@ -344,7 +338,7 @@ elif display_level == "Scheme":
             st.dataframe(df_sub[df_sub["Scheme Name/Area"] == chosen].sort_values("Transaction Date", ascending=False).reset_index(drop=True))
             if st.button(f"Drill into scheme: {chosen}"):
                 st.session_state.drill_stack.append(("Scheme Name/Area", chosen))
-                st.experimental_rerun()
+                st.rerun()
 
 # -------------------------
 # Bottom analytics
