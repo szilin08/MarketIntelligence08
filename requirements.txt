@@ -1,4 +1,4 @@
-streamlit==1.36.0
+streamlit
 pandas==2.2.2
 numpy==1.26.4
 plotly==5.22.0
@@ -15,3 +15,4 @@ yfinance
 statsmodels==0.14.2
 pmdarima==2.0.4
 scikit-learn
+
