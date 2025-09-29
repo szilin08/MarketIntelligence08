@@ -48,8 +48,7 @@ def standardize_name(s):
 # -------------------------
 # Config: local files (update paths if different)
 # -------------------------
-DISTRICT_GEO = r"C:\Users\steffiephang\OneDrive - LBS Bina Holdings Sdn Bhd\Desktop\Steffie\ADHD_Project\AVM 2\gadm41_MYS_2.json"
-
+DISTRICT_GEO = "https://raw.githubusercontent.com/szilin08/MarketIntelligence08/main/gadm41_MYS_2.json"
 # -------------------------
 # UI & Upload
 # -------------------------
@@ -391,3 +390,4 @@ else:
 
 st.subheader("Raw data (current selection)")
 st.dataframe(current.reset_index(drop=True))
+
