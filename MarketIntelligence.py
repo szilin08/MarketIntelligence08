@@ -5,7 +5,6 @@ import plotly.express as px
 from streamlit_plotly_events import plotly_events
 from geopy.geocoders import Nominatim
 import time
-import os
 
 st.set_page_config(layout="wide", page_title="MY Property Market Dashboard")
 
@@ -16,9 +15,13 @@ st.set_page_config(layout="wide", page_title="MY Property Market Dashboard")
 def load_geojson_safe(path):
     """Try to load a geojson safely (force GeoJSON driver if needed)."""
     try:
-        return gpd.read_file(f"GeoJSON:{path}")
-    except Exception:
-        return gpd.read_file(path, driver="GeoJSON")
+        if path.startswith("http"):
+            return gpd.read_file(path)  # Direct read for HTTP URLs
+        else:
+            return gpd.read_file(path, driver="GeoJSON")
+    except Exception as e:
+        st.error(f"Error loading GeoJSON from {path}: {e}")
+        return None
 
 @st.cache_data
 def geocode_places(place_list):
@@ -37,7 +40,7 @@ def geocode_places(place_list):
                 results[key] = (None, None)
         except Exception:
             results[key] = (None, None)
-        time.sleep(1)  # polite
+        time.sleep(1)  # Polite delay
     return results
 
 def standardize_name(s):
@@ -46,9 +49,10 @@ def standardize_name(s):
     return str(s).strip().title()
 
 # -------------------------
-# Config: local files (update paths if different)
+# Config: Use raw GitHub URL
 # -------------------------
 DISTRICT_GEO = "https://raw.githubusercontent.com/szilin08/MarketIntelligence08/main/gadm41_MYS_2.json"
+
 # -------------------------
 # UI & Upload
 # -------------------------
@@ -56,9 +60,9 @@ st.title("Malaysian Property Market Intelligence Dashboard (Drillable Map)")
 
 uploaded_file = st.file_uploader("Upload your Open Transaction Data.xlsx", type=["xlsx"])
 
-# session state for navigation
+# Session state for navigation
 if "drill_stack" not in st.session_state:
-    st.session_state.drill_stack = []  # list of tuples (level, area_name)
+    st.session_state.drill_stack = []  # List of tuples (level, area_name)
 
 # Back control
 col1, col2 = st.columns([1, 6])
@@ -66,6 +70,7 @@ with col1:
     if st.button("⬅ Back"):
         if st.session_state.drill_stack:
             st.session_state.drill_stack.pop()
+            st.experimental_rerun()
 with col2:
     st.write("Click a region on the map to drill down. Use Back to go up.")
 
@@ -78,7 +83,7 @@ if uploaded_file is None:
 # -------------------------
 raw = pd.read_excel(uploaded_file, sheet_name="Open Transaction Data")
 
-# ✅ fix duplicate column names
+# Fix duplicate column names
 raw.columns = [c.strip() for c in raw.columns]
 def deduplicate_columns(columns):
     """Ensure dataframe columns are unique by appending suffixes."""
@@ -95,8 +100,7 @@ def deduplicate_columns(columns):
 
 raw.columns = deduplicate_columns(raw.columns)
 
-
-# attempt to map common header variants to expected names
+# Attempt to map common header variants to expected names
 col_map_guess = {}
 candidates = {
     "Property Type": ["Property Type", "Property type", "PROPERTY TYPE"],
@@ -112,7 +116,7 @@ for std, opts in candidates.items():
             col_map_guess[std] = o
             break
 
-# if price not found, pick last numeric column as fallback
+# If price not found, pick last numeric column as fallback
 if "Transaction Price" not in col_map_guess:
     numeric_cols = raw.select_dtypes(include="number").columns.tolist()
     if numeric_cols:
@@ -125,7 +129,7 @@ if missing:
     st.error(f"Required column(s) missing: {missing}. Detected columns: {raw.columns.tolist()}")
     st.stop()
 
-# clean and derived columns
+# Clean and derived columns
 df["Transaction Date"] = pd.to_datetime(df["Month, Year of Transaction Date"], errors="coerce")
 df["Year"] = df["Transaction Date"].dt.year.fillna(0).astype(int)
 df["Month"] = df["Transaction Date"].dt.month.fillna(0).astype(int)
@@ -136,7 +140,7 @@ df["Mukim"] = df["Mukim"].astype(str).apply(standardize_name)
 df["Scheme Name/Area"] = df["Scheme Name/Area"].astype(str).apply(lambda x: x.strip() if pd.notna(x) else x)
 df["Property Type"] = df["Property Type"].astype(str).apply(standardize_name)
 
-# sidebar filters (chained: District -> Mukim -> Scheme)
+# Sidebar filters (chained: District -> Mukim -> Scheme)
 st.sidebar.header("Filters")
 
 # District filter
@@ -158,7 +162,7 @@ else:
     scheme_options = sorted(df["Scheme Name/Area"].unique())
 scheme_sel = st.sidebar.multiselect("Scheme Name/Area", options=scheme_options, default=[])
 
-# Year and Price range (unchanged)
+# Year and Price range
 min_year = int(df["Year"].replace(0, pd.NA).min(skipna=True))
 max_year = int(df["Year"].max(skipna=True))
 year_range = st.sidebar.slider("Year range", min_year, max_year, (min_year, max_year))
@@ -199,14 +203,19 @@ st.header(f"Map view: {display_level}")
 # District choropleth
 # -------------------------
 if display_level == "District":
-    if not os.path.exists(DISTRICT_GEO):
-        st.error(f"District GeoJSON not found at {DISTRICT_GEO}. Please place the file there.")
+    gdf = load_geojson_safe(DISTRICT_GEO)
+    if gdf is None:
         st.stop()
 
-    gdf = load_geojson_safe(DISTRICT_GEO)
     if "NAME_2" not in gdf.columns:
         st.warning(f"Expected 'NAME_2' in {DISTRICT_GEO} but found columns: {gdf.columns.tolist()}")
+        st.stop()
+
     gdf["NAME_2"] = gdf["NAME_2"].astype(str).apply(standardize_name)
+
+    # Filter gdf based on selected districts
+    if districts_sel:
+        gdf = gdf[gdf["NAME_2"].isin(districts_sel)]
 
     agg = filtered.groupby("District")["Transaction Price"].mean().reset_index().rename(columns={"Transaction Price": "Value"})
     agg["District"] = agg["District"].astype(str).apply(standardize_name)
@@ -234,8 +243,9 @@ if display_level == "District":
         idx = pt.get("pointIndex")
         if idx is not None:
             chosen = merged.iloc[idx]["NAME_2"]
-            st.session_state.drill_stack.append(("District", chosen))
-            st.experimental_rerun()
+            if chosen in filtered["District"].unique():  # Only drill if in filtered data
+                st.session_state.drill_stack.append(("District", chosen))
+                st.experimental_rerun()
 
 # -------------------------
 # Mukim bubble map (geocode fallback) with year bubbles
@@ -287,8 +297,9 @@ elif display_level == "Mukim":
                 idx = clicked[0].get("pointIndex")
                 if idx is not None:
                     chosen = points.iloc[idx]["Mukim"]
-                    st.session_state.drill_stack.append(("Mukim", chosen))
-                    st.experimental_rerun()
+                    if chosen in filtered[filtered["District"] == parent]["Mukim"].unique():  # Only drill if in filtered data
+                        st.session_state.drill_stack.append(("Mukim", chosen))
+                        st.experimental_rerun()
 
 # -------------------------
 # Scheme bubble map & details
@@ -390,4 +401,3 @@ else:
 
 st.subheader("Raw data (current selection)")
 st.dataframe(current.reset_index(drop=True))
-
