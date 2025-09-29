@@ -6,7 +6,6 @@ import plotly.express as px
 from streamlit_plotly_events import plotly_events
 from geopy.geocoders import Nominatim
 import time
-import os
 
 st.set_page_config(layout="wide", page_title="MY Property Market Dashboard")
 
@@ -17,7 +16,7 @@ st.set_page_config(layout="wide", page_title="MY Property Market Dashboard")
 def load_geojson_safe(path):
     """Try to load a geojson safely (force GeoJSON driver if needed)."""
     try:
-        return gpd.read_file(f"GeoJSON:{path}")
+        return gpd.read_file(path)
     except Exception:
         return gpd.read_file(path, driver="GeoJSON")
 
@@ -97,7 +96,6 @@ def deduplicate_columns(columns):
 
 raw.columns = deduplicate_columns(raw.columns)
 
-
 # attempt to map common header variants to expected names
 col_map_guess = {}
 candidates = {
@@ -140,7 +138,6 @@ df["Property Type"] = df["Property Type"].astype(str).apply(standardize_name)
 
 # sidebar filters
 st.sidebar.header("Filters")
-states_sel = st.sidebar.multiselect("State (if present)", options=sorted(df.get("State", df["District"].unique())), default=[])
 districts_sel = st.sidebar.multiselect("District", options=sorted(df["District"].unique()), default=[])
 mukims_sel = st.sidebar.multiselect("Mukim", options=sorted(df["Mukim"].unique()), default=[])
 ptype_sel = st.sidebar.multiselect("Property Type", options=sorted(df["Property Type"].unique()), default=[])
@@ -165,7 +162,6 @@ filtered = filtered[(filtered["Transaction Price"] >= price_range[0]) & (filtere
 # -------------------------
 # Determine display level
 # -------------------------
-# Levels: District (choropleth) -> Mukim (bubble fallback) -> Scheme (bubble)
 if not st.session_state.drill_stack:
     display_level = "District"
 else:
@@ -185,11 +181,12 @@ st.header(f"Map view: {display_level}")
 # District choropleth
 # -------------------------
 if display_level == "District":
-    if not os.path.exists(DISTRICT_GEO):
-        st.error(f"District GeoJSON not found at {DISTRICT_GEO}. Please place the file there.")
+    try:
+        gdf = load_geojson_safe(DISTRICT_GEO)
+    except Exception as e:
+        st.error(f"Failed to load district GeoJSON from {DISTRICT_GEO}. Error: {e}")
         st.stop()
 
-    gdf = load_geojson_safe(DISTRICT_GEO)
     if "NAME_2" not in gdf.columns:
         st.warning(f"Expected 'NAME_2' in {DISTRICT_GEO} but found columns: {gdf.columns.tolist()}")
     gdf["NAME_2"] = gdf["NAME_2"].astype(str).apply(standardize_name)
@@ -224,7 +221,7 @@ if display_level == "District":
             st.experimental_rerun()
 
 # -------------------------
-# Mukim bubble map (geocode fallback)
+# Mukim bubble map
 # -------------------------
 elif display_level == "Mukim":
     parent = None
@@ -233,10 +230,10 @@ elif display_level == "Mukim":
             parent = area
             break
     if parent is None:
-        st.error("Parent district not found in drill stack. Use Back and click a district first.")
+        st.error("Parent district not found. Use Back and click a district first.")
         st.stop()
 
-    st.subheader(f"Mukim-level (bubble map) for: {parent}")
+    st.subheader(f"Mukim-level for: {parent}")
     df_sub = filtered[filtered["District"] == parent].copy()
     if df_sub.empty:
         st.info("No transactions for this district under current filters.")
@@ -375,4 +372,3 @@ else:
 
 st.subheader("Raw data (current selection)")
 st.dataframe(current.reset_index(drop=True))
-
