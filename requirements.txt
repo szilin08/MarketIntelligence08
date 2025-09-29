@@ -12,3 +12,4 @@ openpyxl
 prophet
 yfinance
 statsmodels
+sklearn
