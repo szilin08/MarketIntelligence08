@@ -8,3 +8,4 @@ pyproj
 rtree
 geopy
 streamlit-plotly-events
+openpyxl
