@@ -10,4 +10,4 @@ geopy
 streamlit-plotly-events
 openpyxl
 prophet
-
+yfinance
