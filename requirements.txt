@@ -1,0 +1,10 @@
+streamlit
+pandas
+plotly
+geopandas
+shapely
+fiona
+pyproj
+rtree
+geopy
+streamlit-plotly-events
