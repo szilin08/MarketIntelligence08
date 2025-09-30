@@ -17,26 +17,21 @@ MIN_TRANSACTIONS = 180
 FORECAST_MONTHS = 24
 OUTLIER_THRESHOLD = 0.02
 
-
 # ---------------- CLEANING ----------------
 def clean_data(df):
-    df['date'] = pd.to_datetime(df['Month, Year of Transaction Date'],
-                                format='%b-%y', errors='coerce')
-    df = df.dropna(subset=['date', 'Price Per Sq Ft',
-                           'Property Type', 'District'])
-    lower = df['Price Per Sq Ft'].quantile(OUTLIER_THRESHOLD)
-    upper = df['Price Per Sq Ft'].quantile(1 - OUTLIER_THRESHOLD)
-    return df[(df['Price Per Sq Ft'] > lower) & (df['Price Per Sq Ft'] < upper)]
-
+    df['date'] = pd.to_datetime(df['Month, Year of Transaction Date'], errors='coerce')
+    df = df.dropna(subset=['date', 'Transaction Price', 'Property Type', 'District'])
+    lower = df['Transaction Price'].quantile(OUTLIER_THRESHOLD)
+    upper = df['Transaction Price'].quantile(1 - OUTLIER_THRESHOLD)
+    return df[(df['Transaction Price'] > lower) & (df['Transaction Price'] < upper)]
 
 def get_valid_groups(df):
     grouped = df.groupby(['Property Type', 'District']).agg(
-        transaction_count=('Price Per Sq Ft', 'size'),
+        transaction_count=('Transaction Price', 'size'),
         date_range=('date', lambda x: x.nunique())
     )
     return grouped[(grouped['date_range'] >= MIN_HISTORY) &
                    (grouped['transaction_count'] >= MIN_TRANSACTIONS)].reset_index()
-
 
 # ---------------- FORECASTING ----------------
 def process_group(df, prop_type, district):
@@ -44,7 +39,7 @@ def process_group(df, prop_type, district):
         subset = df[(df['Property Type'] == prop_type) &
                     (df['District'] == district)]
         ts_data = subset.groupby(pd.Grouper(key='date', freq='ME'))[
-            'Price Per Sq Ft'].mean().reset_index()
+            'Transaction Price'].mean().reset_index()
         ts_data.columns = ['ds', 'y']
         ts_data = ts_data.dropna()
 
@@ -57,16 +52,14 @@ def process_group(df, prop_type, district):
         # ARIMA model
         arima_model = ARIMA(train['y'], order=(2, 1, 2)).fit()
         arima_pred = arima_model.forecast(steps=12)
-        arima_mape = mean_absolute_percentage_error(
-            test['y'], arima_pred) * 100
+        arima_mape = mean_absolute_percentage_error(test['y'], arima_pred) * 100
 
         # Prophet model
         prophet_model = Prophet(yearly_seasonality=True).fit(train)
         prophet_pred = prophet_model.predict(
             prophet_model.make_future_dataframe(periods=12, freq='M')
         ).iloc[-12:]['yhat']
-        prophet_mape = mean_absolute_percentage_error(
-            test['y'], prophet_pred) * 100
+        prophet_mape = mean_absolute_percentage_error(test['y'], prophet_pred) * 100
 
         # Use model if within accuracy threshold
         if arima_mape <= 15 or prophet_mape <= 25:
@@ -77,8 +70,7 @@ def process_group(df, prop_type, district):
             prophet_model_full = Prophet(yearly_seasonality=True).fit(ts_data)
             future_prophet = prophet_model_full.make_future_dataframe(
                 periods=FORECAST_MONTHS, freq='M')
-            forecast_prophet = prophet_model_full.predict(
-                future_prophet).iloc[-FORECAST_MONTHS:]
+            forecast_prophet = prophet_model_full.predict(future_prophet).iloc[-FORECAST_MONTHS:]
 
             return {
                 'Property Type': prop_type,
@@ -101,23 +93,16 @@ def process_group(df, prop_type, district):
     except Exception:
         return None
 
-
 # ---------------- STREAMLIT APP ----------------
 def run():
     st.header("🏠 Automated Valuation Model")
 
-    uploaded_file = st.file_uploader("Upload transaction CSV", type="csv")
+    uploaded_file = st.file_uploader("Upload transaction data (Excel)", type="xlsx")
     if uploaded_file is None:
-        st.info("Please upload your transaction dataset (CSV).")
+        st.info("Please upload your transaction dataset (Excel).")
         return
 
-    df = pd.read_csv(
-        uploaded_file,
-        encoding='latin-1',
-        converters={'Price Per Sq Ft': lambda x: float(
-            str(x).replace('RM', '').replace(',', '').strip())},
-        low_memory=False
-    )
+    df = pd.read_excel(uploaded_file, sheet_name="Open Transaction Data")
     df = clean_data(df)
     valid_groups = get_valid_groups(df)
 
@@ -149,10 +134,10 @@ def run():
     # Plot results
     actual_df = df[(df['Property Type'] == prop_type) &
                    (df['District'] == district)].groupby('date')[
-        'Price Per Sq Ft'].mean().reset_index()
+        'Transaction Price'].mean().reset_index()
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=actual_df['date'], y=actual_df['Price Per Sq Ft'],
+    fig.add_trace(go.Scatter(x=actual_df['date'], y=actual_df['Transaction Price'],
                              mode='lines', name='Actual', line=dict(color='#4A90E2')))
     fig.add_trace(go.Scatter(x=forecast_df['Date'], y=forecast_df['ARIMA_Forecast'],
                              mode='lines', name='ARIMA Forecast', line=dict(color='#F5A623')))
@@ -160,7 +145,7 @@ def run():
                              mode='lines', name='Prophet Forecast', line=dict(color='#2E7D32')))
     fig.update_layout(title=f"Forecast for {prop_type} in {district}",
                       xaxis_title="Date",
-                      yaxis_title="Price per Sq Ft (RM)",
+                      yaxis_title="Transaction Price (RM)",
                       template="plotly_white")
 
     st.plotly_chart(fig, use_container_width=True)
@@ -171,7 +156,6 @@ def run():
         "ARIMA_MAPE%": [result['ARIMA_MAPE']],
         "Prophet_MAPE%": [result['Prophet_MAPE']]
     }))
-
 
 if __name__ == "__main__":
     run()
