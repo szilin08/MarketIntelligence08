@@ -9,10 +9,13 @@ pyproj
 rtree
 geopy
 streamlit-plotly-events
+streamlit
 openpyxl
-prophet==1.1.5
-yfinance
+prophet==1.1.4
 statsmodels==0.14.2
 pmdarima==2.0.4
 scikit-learn
+yfinance
+
+
 
