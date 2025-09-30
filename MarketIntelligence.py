@@ -6,7 +6,7 @@ from streamlit_plotly_events import plotly_events
 from geopy.geocoders import Nominatim
 import time
 import os
-from prophet import Prophet  # For time-series forecasting
+from prophet import Prophet  # For time-series forecasting (if needed in future)
 
 # -------------------------
 # Page Config
@@ -47,7 +47,7 @@ def deduplicate_columns(columns):
 def load_geojson_safe(path):
     """Try to load a geojson safely (force GeoJSON driver if needed)."""
     try:
-        return gpd.read_file(f"GeoJSON:{path}")
+        return gpd.read_file(path)  # Use relative path or URL for cloud
     except Exception:
         return gpd.read_file(path, driver="GeoJSON")
 
@@ -77,7 +77,8 @@ def geocode_places(place_list):
 if page == "Property Market Dashboard":
     st.title("Malaysian Property Market Intelligence Dashboard (Drillable Map)")
 
-    DISTRICT_GEO = r"C:\Users\steffiephang\OneDrive - LBS Bina Holdings Sdn Bhd\Desktop\Steffie\ADHD_Project\AVM 2\gadm41_MYS_2.json"
+    # Use a relative path or upload GeoJSON file
+    DISTRICT_GEO = "gadm41_MYS_2.json"  # Ensure this file is in the repo or uploaded
     uploaded_file = st.file_uploader("Upload your Open Transaction Data.xlsx", type=["xlsx"])
 
     # session state for navigation
@@ -139,24 +140,19 @@ if page == "Property Market Dashboard":
     df["Scheme Name/Area"] = df["Scheme Name/Area"].astype(str).apply(lambda x: x.strip() if pd.notna(x) else x)
     df["Property Type"] = df["Property Type"].astype(str).apply(standardize_name)
 
-    # (Rest of your map + drilldown logic remains the same)
-    # -------------------------
-    # I’ll stop here to keep the rewrite short – but I would paste your existing 
-    # District/Mukim/Scheme drilldown, analytics, and charts here
-    # -------------------------
+    # Placeholder for your existing drilldown logic (add back your map code here)
+    st.write("Map and drilldown logic would go here. Upload the GeoJSON file or use a URL.")
 
 # -------------------------
 # Page 2: Automated Valuation Model
 # -------------------------
-
 elif page == "Automated Valuation Model":
-    Automated_Valuation_Model.run()
+    import Automated_Valuation_Model  # Import the module
+    Automated_Valuation_Model.run()  # Call the run function
 
 # -------------------------
-# Page 3: Third Page
+# Page 3: Shares Playground
 # -------------------------
 elif page == "Shares Playground":
-    exec(open("Shares_Steff_Playground.py").read())
-
-
-
+    import Shares_Steff_Playground  # Import the module
+    Shares_Steff_Playground.main()  # Call the main function
