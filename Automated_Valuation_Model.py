@@ -1,161 +1,139 @@
-# avm.py (Streamlit version)
-
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
-import plotly.express as px
-from statsmodels.tsa.arima.model import ARIMA
-from prophet import Prophet
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.metrics import mean_absolute_percentage_error
-import warnings
 
-warnings.filterwarnings("ignore")
+st.title("🏡 Automated Valuation Model (AVM)")
 
-# ---------------- CONFIG ----------------
-MIN_HISTORY = 36  # 3 years
-MIN_TRANSACTIONS = 180
-FORECAST_MONTHS = 24
-OUTLIER_THRESHOLD = 0.02
+# --- Load Data ---
+@st.cache_data
+def load_data(path):
+    df = pd.read_excel(path, sheet_name="Open Transaction Data")
+    df.columns = [c.strip() for c in df.columns]
 
-# ---------------- CLEANING ----------------
-def clean_data(df):
-    df['date'] = pd.to_datetime(df['Month, Year of Transaction Date'], errors='coerce')
-    df = df.dropna(subset=['date', 'Transaction Price', 'Property Type', 'District'])
-    lower = df['Transaction Price'].quantile(OUTLIER_THRESHOLD)
-    upper = df['Transaction Price'].quantile(1 - OUTLIER_THRESHOLD)
-    return df[(df['Transaction Price'] > lower) & (df['Transaction Price'] < upper)]
+    # Map possible column names
+    candidates = {
+        "Transaction Date": ["Transaction Date", "Month, Year of Transaction Date", "Transaction Date Serial"],
+        "Transaction Price": ["Transaction Price", "Price", "Amount", "Consideration"],
+        "District": ["District", "DISTRICT", "Daerah"],
+        "Mukim": ["Mukim", "MUKIM"],
+        "Property Type": ["Property Type", "PROPERTY TYPE", "Type"],
+        "Scheme Name/Area": ["Scheme Name/Area", "Scheme Name", "Scheme", "Area"]
+    }
 
-def get_valid_groups(df):
-    grouped = df.groupby(['Property Type', 'District']).agg(
-        transaction_count=('Transaction Price', 'size'),
-        date_range=('date', lambda x: x.nunique())
-    )
-    return grouped[(grouped['date_range'] >= MIN_HISTORY) &
-                   (grouped['transaction_count'] >= MIN_TRANSACTIONS)].reset_index()
+    col_map = {}
+    for std, opts in candidates.items():
+        for o in opts:
+            if o in df.columns:
+                col_map[std] = o
+                break
 
-# ---------------- FORECASTING ----------------
-def process_group(df, prop_type, district):
-    try:
-        subset = df[(df['Property Type'] == prop_type) &
-                    (df['District'] == district)]
-        ts_data = subset.groupby(pd.Grouper(key='date', freq='ME'))[
-            'Transaction Price'].mean().reset_index()
-        ts_data.columns = ['ds', 'y']
-        ts_data = ts_data.dropna()
+    # Fallbacks
+    if "Transaction Price" not in col_map:
+        num_cols = df.select_dtypes(include="number").columns.tolist()
+        if num_cols:
+            col_map["Transaction Price"] = num_cols[-1]
 
-        if len(ts_data) < MIN_HISTORY:
-            return None
+    if "Transaction Date" not in col_map:
+        st.error(f"No date column found. Available: {df.columns.tolist()}")
+        st.stop()
 
-        train = ts_data.iloc[:-12]
-        test = ts_data.iloc[-12:]
+    # Rename
+    df = df.rename(columns={v: k for k, v in col_map.items()})
 
-        # ARIMA model
-        arima_model = ARIMA(train['y'], order=(2, 1, 2)).fit()
-        arima_pred = arima_model.forecast(steps=12)
-        arima_mape = mean_absolute_percentage_error(test['y'], arima_pred) * 100
+    # Format
+    df["Transaction Date"] = pd.to_datetime(df["Transaction Date"], errors="coerce")
+    df["Transaction Price"] = pd.to_numeric(df["Transaction Price"], errors="coerce")
 
-        # Prophet model
-        prophet_model = Prophet(yearly_seasonality=True).fit(train)
-        prophet_pred = prophet_model.predict(
-            prophet_model.make_future_dataframe(periods=12, freq='M')
-        ).iloc[-12:]['yhat']
-        prophet_mape = mean_absolute_percentage_error(test['y'], prophet_pred) * 100
+    for cat in ["District", "Mukim", "Property Type", "Scheme Name/Area"]:
+        if cat in df.columns:
+            df[cat] = df[cat].astype(str).str.strip().str.title()
 
-        # Use model if within accuracy threshold
-        if arima_mape <= 15 or prophet_mape <= 25:
-            full_model = ARIMA(ts_data['y'], order=(2, 1, 2)).fit()
-            forecast = full_model.get_forecast(steps=FORECAST_MONTHS)
+    df = df.dropna(subset=["Transaction Date", "Transaction Price"])
+    df["Year"] = df["Transaction Date"].dt.year
+    df["Month"] = df["Transaction Date"].dt.month
 
-            # Fit Prophet on full data
-            prophet_model_full = Prophet(yearly_seasonality=True).fit(ts_data)
-            future_prophet = prophet_model_full.make_future_dataframe(
-                periods=FORECAST_MONTHS, freq='M')
-            forecast_prophet = prophet_model_full.predict(future_prophet).iloc[-FORECAST_MONTHS:]
+    return df
 
-            return {
-                'Property Type': prop_type,
-                'District': district,
-                'ARIMA_MAPE': arima_mape,
-                'Prophet_MAPE': prophet_mape,
-                'ARIMA_Forecast': forecast.predicted_mean,
-                'ARIMA_Lower_CI': forecast.conf_int().iloc[:, 0],
-                'ARIMA_Upper_CI': forecast.conf_int().iloc[:, 1],
-                'Prophet_Forecast': forecast_prophet['yhat'].values,
-                'Prophet_Lower_CI': forecast_prophet['yhat_lower'].values,
-                'Prophet_Upper_CI': forecast_prophet['yhat_upper'].values,
-                'Dates': pd.date_range(
-                    start=ts_data['ds'].max() + pd.DateOffset(months=1),
-                    periods=FORECAST_MONTHS,
-                    freq='ME'
-                ),
-            }
-        return None
-    except Exception:
-        return None
+# Path
+data_path = r"C:\Users\steffiephang\OneDrive - LBS Bina Holdings Sdn Bhd\Desktop\Steffie\ADHD_Project\AVM 2\Open Transaction Data.xlsx"
+df = load_data(data_path)
 
-# ---------------- STREAMLIT APP ----------------
-def run():
-    st.header("🏠 Automated Valuation Model")
+# --- Sidebar Filters ---
+st.sidebar.header("Filters")
 
-    uploaded_file = st.file_uploader("Upload transaction data (Excel)", type="xlsx")
-    if uploaded_file is None:
-        st.info("Please upload your transaction dataset (Excel).")
-        return
+district_sel = st.sidebar.multiselect("District", df["District"].unique()) if "District" in df.columns else []
+mukim_sel = st.sidebar.multiselect("Mukim", df["Mukim"].unique()) if "Mukim" in df.columns else []
+ptype_sel = st.sidebar.multiselect("Property Type", df["Property Type"].unique()) if "Property Type" in df.columns else []
 
-    df = pd.read_excel(uploaded_file, sheet_name="Open Transaction Data")
-    df = clean_data(df)
-    valid_groups = get_valid_groups(df)
+# Apply filters
+filtered_df = df.copy()
+if district_sel:
+    filtered_df = filtered_df[filtered_df["District"].isin(district_sel)]
+if mukim_sel:
+    filtered_df = filtered_df[filtered_df["Mukim"].isin(mukim_sel)]
+if ptype_sel:
+    filtered_df = filtered_df[filtered_df["Property Type"].isin(ptype_sel)]
 
-    if valid_groups.empty:
-        st.warning("No valid property groups found with enough history.")
-        return
+if filtered_df.empty:
+    st.warning("No data available for the selected filters.")
+    st.stop()
 
-    # Dropdowns
-    prop_type = st.selectbox("Property Type", valid_groups['Property Type'].unique())
-    district = st.selectbox("District", valid_groups['District'].unique())
+# --- Aggregate by month (USE FILTERED DATA) ---
+ts = filtered_df.groupby(pd.Grouper(key="Transaction Date", freq="M"))["Transaction Price"].mean().dropna()
 
-    st.write("Generating forecast...")
-    result = process_group(df, prop_type, district)
+# --- Historical Chart ---
+st.subheader("📈 Historical Monthly Average Prices")
+st.line_chart(ts)
 
-    if not result:
-        st.error("Not enough data for reliable forecast.")
-        return
+# --- Holt-Winters Forecast ---
+periods = st.slider("Forecast horizon (months)", 6, 24, 12)
 
-    forecast_df = pd.DataFrame({
-        'Date': result['Dates'],
-        'ARIMA_Forecast': result['ARIMA_Forecast'],
-        'ARIMA_Lower_CI': result['ARIMA_Lower_CI'],
-        'ARIMA_Upper_CI': result['ARIMA_Upper_CI'],
-        'Prophet_Forecast': result['Prophet_Forecast'],
-        'Prophet_Lower_CI': result['Prophet_Lower_CI'],
-        'Prophet_Upper_CI': result['Prophet_Upper_CI'],
-    })
+model = ExponentialSmoothing(ts, trend="add", seasonal="add", seasonal_periods=12)
+fit = model.fit()
+forecast = fit.forecast(periods)
 
-    # Plot results
-    actual_df = df[(df['Property Type'] == prop_type) &
-                   (df['District'] == district)].groupby('date')[
-        'Transaction Price'].mean().reset_index()
+# Plot forecast
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=ts.index, y=ts.values, mode="lines+markers", name="Actual"))
+fig.add_trace(go.Scatter(x=forecast.index, y=forecast.values, mode="lines", name="Forecast"))
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=actual_df['date'], y=actual_df['Transaction Price'],
-                             mode='lines', name='Actual', line=dict(color='#4A90E2')))
-    fig.add_trace(go.Scatter(x=forecast_df['Date'], y=forecast_df['ARIMA_Forecast'],
-                             mode='lines', name='ARIMA Forecast', line=dict(color='#F5A623')))
-    fig.add_trace(go.Scatter(x=forecast_df['Date'], y=forecast_df['Prophet_Forecast'],
-                             mode='lines', name='Prophet Forecast', line=dict(color='#2E7D32')))
-    fig.update_layout(title=f"Forecast for {prop_type} in {district}",
-                      xaxis_title="Date",
-                      yaxis_title="Transaction Price (RM)",
-                      template="plotly_white")
+# Confidence band
+upper = forecast * 1.1
+lower = forecast * 0.9
+fig.add_trace(go.Scatter(x=forecast.index, y=upper, mode="lines", line=dict(width=0), showlegend=False))
+fig.add_trace(go.Scatter(x=forecast.index, y=lower, mode="lines", line=dict(width=0), fill="tonexty", name="Confidence Band"))
 
-    st.plotly_chart(fig, use_container_width=True)
+fig.update_layout(title="Forecasted Property Prices", yaxis_title="Price (RM)", template="plotly_white")
+st.plotly_chart(fig, use_container_width=True)
 
-    # Accuracy report
-    st.subheader("Model Accuracy")
-    st.write(pd.DataFrame({
-        "ARIMA_MAPE%": [result['ARIMA_MAPE']],
-        "Prophet_MAPE%": [result['Prophet_MAPE']]
-    }))
+# --- Simple Valuation ---
+st.subheader("💰 Property Valuation")
+latest_price = ts.iloc[-1]
+valuation = forecast.iloc[-1]
 
-if __name__ == "__main__":
-    run()
+st.metric(label="Last Observed Avg Price", value=f"RM {latest_price:,.0f}")
+st.metric(label="Forecasted Value (Next Period)", value=f"RM {valuation:,.0f}")
+
+# --- Backtesting ---
+st.subheader("🔍 Backtesting Performance")
+if len(ts) > 24:
+    train = ts.iloc[:-12]
+    test = ts.iloc[-12:]
+
+    fit_bt = ExponentialSmoothing(train, trend="add", seasonal="add", seasonal_periods=12).fit()
+    pred_bt = fit_bt.forecast(12)
+
+    mape = mean_absolute_percentage_error(test, pred_bt)
+    st.write(f"Backtest MAPE (last 12 months): **{mape:.2%}**")
+
+    bt_fig = go.Figure()
+    bt_fig.add_trace(go.Scatter(x=train.index, y=train.values, mode="lines", name="Train"))
+    bt_fig.add_trace(go.Scatter(x=test.index, y=test.values, mode="lines+markers", name="Test (Actual)"))
+    bt_fig.add_trace(go.Scatter(x=pred_bt.index, y=pred_bt.values, mode="lines+markers", name="Predicted"))
+    bt_fig.update_layout(title="Backtesting Forecast vs Actual", yaxis_title="Price (RM)", template="plotly_white")
+    st.plotly_chart(bt_fig, use_container_width=True)
+else:
+    st.info("Not enough data for backtesting (need > 24 months).")
